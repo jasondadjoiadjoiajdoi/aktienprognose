@@ -1,21 +1,22 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>KI Aktien Analyse 2026</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
 body{background:#0f1115;color:#e7fdf9;font-family:system-ui;margin:0;padding:12px}
-h1{text-align:center;font-size:1.4rem}
+h1{text-align:center;font-size:1.4rem;margin:6px 0}
 small{text-align:center;display:block;color:#9cc}
 select,button{
-  width:100%;padding:14px;margin-top:10px;
+  width:100%;padding:14px;margin-top:10px;font-size:1rem;
   border-radius:12px;border:1px solid #00ccaa;
-  background:#141822;color:#e7fdf9;font-size:1rem
+  background:#141822;color:#e7fdf9
 }
+button:disabled{opacity:.6}
 .status{text-align:center;margin-top:8px;font-weight:bold}
 .hint{text-align:center;font-size:.85rem;color:#9cc}
 .progress{height:7px;background:#1e2433;border-radius:4px;overflow:hidden;margin-top:6px}
@@ -28,7 +29,7 @@ canvas{margin-top:12px;background:#111;border-radius:12px}
 <body>
 
 <h1>KI Aktien Analyse 2026</h1>
-<small>Stabil • Ohne Server • HTTPS ready</small>
+<small>Client-only • HTTPS • stabil</small>
 
 <select id="stock"></select>
 <button id="analyzeBtn">🔍 Analyse starten</button>
@@ -47,8 +48,11 @@ canvas{margin-top:12px;background:#111;border-radius:12px}
 </div>
 
 <script>
-/* ================= API KEY ================= */
-const FINNHUB_KEY="d61m2spr01qgcobq1k10d61m2spr01qgcobq1k1g";
+/* ================= API KEY =================
+   👉 HIER DEINEN NEUEN FINNHUB API-KEY EINFÜGEN
+   (NUR DER API-KEY, KEIN SECRET)
+*/
+const FINNHUB_KEY = "HIER_DEIN_API_KEY_EINFÜGEN";
 
 /* ================= AKTIEN ================= */
 const STOCKS=[
@@ -71,7 +75,6 @@ STOCKS.forEach(s=>{
 function getMarket(sym){
   return ["SAP","ASML","NESN","ROG","ABB"].includes(sym)?"EU":"US";
 }
-
 function marketTimes(){
   const m=getMarket(stockSel.value);
   const n=new Date(),d=n.getDay();
@@ -86,7 +89,6 @@ function marketTimes(){
   if(h<15.5) return {open:false,openIn:15.5-h,market:m};
   return {open:false,next:"Morgen 15:30",market:m};
 }
-
 function updateMarket(){
   const m=marketTimes();
   marketStatus.textContent=m.open?"🟢 Börse offen":"🔴 Börse geschlossen";
@@ -130,9 +132,35 @@ function normalizeSymbol(s){
   return map[s]||s;
 }
 
+/* ================= CACHE + COOLDOWN =================
+   1 Request / Aktie / 30 Minuten
+*/
+const CACHE_MINUTES = 30;
+function getCacheKey(sym){ return "fh_cache_"+sym; }
+
+function loadFromCache(sym){
+  const raw=localStorage.getItem(getCacheKey(sym));
+  if(!raw) return null;
+  try{
+    const c=JSON.parse(raw);
+    if(Date.now()-c.time < CACHE_MINUTES*60000) return c.data;
+  }catch{}
+  return null;
+}
+function saveToCache(sym,data){
+  localStorage.setItem(getCacheKey(sym),JSON.stringify({
+    time:Date.now(),data
+  }));
+}
+
 /* ================= DATEN ================= */
 async function loadMarketData(){
   const sym=normalizeSymbol(stockSel.value);
+
+  // Cache zuerst
+  const cached=loadFromCache(sym);
+  if(cached) return cached;
+
   const now=Math.floor(Date.now()/1000);
   const from=now-86400*120;
 
@@ -145,12 +173,14 @@ async function loadMarketData(){
     if(!text) return {__error:"EMPTY_RESPONSE"};
 
     let d;
-    try{d=JSON.parse(text);}catch{return {__error:"INVALID_JSON"};}
+    try{ d=JSON.parse(text); }catch{ return {__error:"INVALID_JSON"}; }
 
     if(d.error) return {__error:"INVALID_KEY"};
     if(d.s==="no_data") return {__error:"NO_DATA"};
-    if(d.s!=="ok"||!d.c||d.c.length<10) return {__error:"INVALID_DATA"};
+    if(d.s!=="ok"||!Array.isArray(d.c)||d.c.length<10)
+      return {__error:"INVALID_DATA"};
 
+    saveToCache(sym,d);
     return d;
   }catch{
     return {__error:"FETCH_FAILED"};
@@ -162,7 +192,10 @@ let KI_AKTIV=true;
 const kiBtn=document.createElement("button");
 kiBtn.textContent="🧠 KI: EIN";
 document.body.insertBefore(kiBtn,marketStatus);
-kiBtn.onclick=()=>{KI_AKTIV=!KI_AKTIV;kiBtn.textContent=KI_AKTIV?"🧠 KI: EIN":"🧠 KI: AUS";};
+kiBtn.onclick=()=>{
+  KI_AKTIV=!KI_AKTIV;
+  kiBtn.textContent=KI_AKTIV?"🧠 KI: EIN":"🧠 KI: AUS";
+};
 
 function runKI(d){
   const c=d.c,o=d.o||d.c,n=c.length-1;
@@ -199,7 +232,7 @@ btn.onclick=async()=>{
       "INVALID_JSON":"⚠️ API-Fehler",
       "FETCH_FAILED":"🌐 Netzwerkfehler"
     };
-    info.textContent=map[d.__error];
+    info.textContent=map[d.__error]||"⚠️ Fehler";
     status.textContent="⚠️ Analyse nicht möglich";
     btn.disabled=false;
     return;
@@ -208,7 +241,10 @@ btn.onclick=async()=>{
   drawChart(d);
   progress(60);
 
-  const r=KI_AKTIV?runKI(d):{signal:"HALTEN",timing:"Neutral",stability:50,invalid:"–",reasons:["• KI AUS"]};
+  const r=KI_AKTIV?runKI(d):{
+    signal:"HALTEN",timing:"Neutral",stability:50,invalid:"–",
+    reasons:["• KI AUS"]
+  };
 
   info.innerHTML=`
     <b>Signal:</b> ${r.signal}<br>
