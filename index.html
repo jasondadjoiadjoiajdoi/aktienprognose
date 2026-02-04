@@ -29,7 +29,7 @@ canvas{margin-top:12px;background:#111;border-radius:12px}
 <body>
 
 <h1>KI Aktien Analyse 2026</h1>
-<small>Client-only • HTTPS • stabil</small>
+<small>Client-only • HTTPS • stabil • Cache + Cooldown</small>
 
 <select id="stock"></select>
 <button id="analyzeBtn">🔍 Analyse starten</button>
@@ -49,10 +49,77 @@ canvas{margin-top:12px;background:#111;border-radius:12px}
 
 <script>
 /* ================= API KEY =================
-   👉 HIER DEINEN NEUEN FINNHUB API-KEY EINFÜGEN
-   (NUR DER API-KEY, KEIN SECRET)
+   👉 Trage hier deinen NEUEN Finnhub-API-Key ein
 */
-const FINNHUB_KEY = "d61m931r01qgcobq26r0d61m931r01qgcobq26rg";
+const FINNHUB_KEY = "d61mk09r01qgcobq38fgd61mk09r01qgcobq38g0";
+
+/* ================= AKTIEN ================= */
+const STOCKS=[
+ ["AAPL","Apple"],["MSFT","Microsoft"],["NVDA","NVIDIA"],
+ ["TSLA","Tesla"],["AMZN","Amazon"],["GOOGL","Alphabet"],
+ ["META","Meta"],["SAP","SAP"],["ASML","ASML"],
+ ["NESN","Nestlé"],["ROG","Roche"],["ABB","ABB"],
+ ["JPM","JPMorgan"],["V","Visa"],["MA","Mastercard"],
+ ["KO","Coca-Cola"],["AMD","AMD"],["INTC","Intel"]
+];
+
+const stockSel=document.getElementById("stock");
+STOCKS.forEach(s=>{
+  const o=document.createElement("option");
+  o.value=s[0]; o.textContent=s[0]+" – "+s[1];
+  stockSel.appendChild(o);
+});
+
+/* ================= MARKT ================= */
+function getMarket(sym){
+  return ["SAP","ASML","NESN","ROG","ABB"].includes(sym)?"EU":"US";
+}
+function marketTimes(){
+  const m=getMarket(stockSel.value);
+  const n=new Date(),d=n.getDay();
+  const h=n.getHours()+n.getMinutes()/60;
+  if(d===0||d===6) return {open:false,next:"Montag",market:m};
+  if(m==="EU"){
+    if(h>=9&&h<17.5) return {open:true,closeIn:17.5-h,market:m};
+    if(h<9) return {open:false,openIn:9-h,market:m};
+    return {open:false,next:"Morgen 09:00",market:m};
+  }
+  if(h>=15.5&&h<22) return {open:true,closeIn:22-h,market:m};
+  if(h<15.5) return {open:false,openIn:15.5-h,market:m};
+  return {open:false,next:"Morgen 15:30",market:m};
+}
+function updateMarket(){
+  const m=marketTimes();
+  marketStatus.textContent=m.open?"🟢 Börse offen":"🔴 Börse geschlossen";
+  countdown.textContent=m.open
+    ?`Schließt in ${Math.round(m.closeIn*60)} Min`
+    :m.openIn?`Öffnet in ${Math.round(m.openIn*60)} Min`
+    :`Nächste Öffnung: ${m.next}`;
+}
+setInterval(updateMarket,30000);
+updateMarket();
+
+/* ================= CHART ================= */
+let chart;
+function drawChart(d){
+  if(chart) chart.destroy();
+  chart=new Chart(document.getElementById("chart"),{
+    type:"line",
+    data:{labels:d.c.map((_,i)=>i),
+      datasets:[{data:d.c,borderColor:"#00ccaa",tension:.3}]},
+    options:{plugins:{legend:{display:false}},responsive:true}
+  });
+}
+
+/* ================= COMMON ================= */
+const bar=document.getElementById("bar");
+const status=document.getElementById("status");
+const info=document.getElementById("info");
+const btn=document.getElementById("analyzeBtn");
+function progress(p){bar.style.width=p+"%";}
+</script>
+
+";
 
 /* ================= AKTIEN ================= */
 const STOCKS=[
@@ -157,7 +224,6 @@ function saveToCache(sym,data){
 async function loadMarketData(){
   const sym=normalizeSymbol(stockSel.value);
 
-  // Cache zuerst
   const cached=loadFromCache(sym);
   if(cached) return cached;
 
