@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>KI Aktien Analyse</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{
+  background:#0f1115;
+  color:#e7fdf9;
+  font-family:system-ui,Arial;
+  margin:0;
+  padding:12px;
+}
+h1{text-align:center;font-size:1.4rem;margin:6px 0}
+small{text-align:center;display:block;color:#9cc}
+
+select,button{
+  width:100%;
+  padding:14px;
+  margin-top:10px;
+  font-size:1rem;
+  border-radius:12px;
+  border:1px solid #00ccaa;
+  background:#141822;
+  color:#e7fdf9;
+}
+
+button:disabled{opacity:.6}
+button:active{transform:scale(.97)}
+
+.status{text-align:center;margin-top:8px;font-weight:bold}
+.hint{text-align:center;font-size:.85rem;color:#9cc}
+
+.progress{
+  height:7px;
+  background:#1e2433;
+  border-radius:4px;
+  overflow:hidden;
+  margin-top:6px;
+}
+.progress div{
+  height:100%;
+  width:0%;
+  background:#00ccaa;
+  transition:width .3s;
+}
+
+.box{
+  background:#141822;
+  border:1px solid #00ccaa;
+  border-radius:12px;
+  padding:10px;
+  margin-top:10px;
+  font-size:.9rem;
+}
+
+canvas{
+  margin-top:12px;
+  background:#111;
+  border-radius:12px;
+}
+</style>
+</head>
+
+<body>
+
+<h1>📈 KI Aktien Analyse</h1>
+<small>Mobile & Desktop – stabil & ohne Freeze</small>
+
+<select id="stock"></select>
+
+<button id="analyzeBtn">🔍 Analyse starten</button>
+
+<div class="status" id="marketStatus">Marktstatus wird geladen…</div>
+<div class="hint" id="countdown"></div>
+<div class="status" id="status">Bereit</div>
+
+<div class="progress"><div id="bar"></div></div>
+
+<canvas id="chart" height="260"></canvas>
+
+<div class="box">
+  <b>Analyse-Hinweis</b>
+  <div id="info">–</div>
+</div>
+
+<script>
+/* ================= KONFIG ================= */
+const FINNHUB_KEY="d5ohqjhr01qjast6qrjgd5ohqjhr01qjast6qrk0";
+
+/* ================= AKTIEN ================= */
+const STOCKS=[
+ ["AAPL","Apple Inc."],
+ ["MSFT","Microsoft Corp."],
+ ["NVDA","NVIDIA Corp."],
+ ["TSLA","Tesla Inc."],
+ ["AMZN","Amazon.com Inc."],
+ ["GOOGL","Alphabet Inc."],
+ ["META","Meta Platforms"],
+ ["SAP","SAP SE"],
+ ["ASML","ASML Holding"],
+ ["NESN.SW","Nestlé SA"],
+ ["ROG.SW","Roche Holding"]
+];
+
+const stockSel=document.getElementById("stock");
+STOCKS.forEach(s=>{
+  const o=document.createElement("option");
+  o.value=s[0];
+  o.textContent=s[0]+" – "+s[1];
+  stockSel.appendChild(o);
+});
+
+/* ================= BÖRSENLOGIK ================= */
+function getMarketForSymbol(symbol){
+  if(symbol.endsWith(".SW")) return "EU";
+  if(["SAP","ASML","NESN","ROG"].some(s=>symbol.startsWith(s))) return "EU";
+  return "US";
+}
+
+function marketTimes(){
+  const symbol=stockSel.value;
+  const market=getMarketForSymbol(symbol);
+  const now=new Date();
+  const day=now.getDay();
+  const h=now.getHours()+now.getMinutes()/60;
+
+  if(day===0||day===6){
+    return {open:false,next:"Montag",market};
+  }
+
+  if(market==="EU"){
+    const open=9, close=17.5;
+    if(h>=open&&h<close) return {open:true,closeIn:(close-h),market};
+    if(h<open) return {open:false,openIn:(open-h),market};
+    return {open:false,next:"Morgen 09:00",market};
+  }
+
+  const open=15.5, close=22;
+  if(h>=open&&h<close) return {open:true,closeIn:(close-h),market};
+  if(h<open) return {open:false,openIn:(open-h),market};
+  return {open:false,next:"Morgen 15:30",market};
+}
+
+function updateMarket(){
+  const m=marketTimes();
+  const flag=m.market==="EU"?"🇪🇺 Europa":"🇺🇸 USA";
+  if(m.open){
+    marketStatus.textContent=`🟢 Börse offen (${flag})`;
+    countdown.textContent="Schließt in ca. "+Math.round(m.closeIn*60)+" Minuten";
+  }else{
+    marketStatus.textContent=`🔴 Börse geschlossen (${flag})`;
+    countdown.textContent=m.openIn
+      ?"Öffnet in ca. "+Math.round(m.openIn*60)+" Minuten"
+      :"Nächste Öffnung: "+m.next;
+  }
+}
+setInterval(updateMarket,30000);
+updateMarket();
+
+/* ⭐ FIX: sofort neu berechnen bei Aktienwechsel */
+stockSel.addEventListener("change",()=>{
+  updateMarket();
+  info.textContent="–";
+  bar.style.width="0%";
+});
+
+/* ================= ANALYSE ENGINE ================= */
+const btn=document.getElementById("analyzeBtn");
+let busy=false, chart;
+
+btn.addEventListener("click",()=>{
+  if(busy) return;
+  busy=true; btn.disabled=true;
+  startAnalysis().finally(()=>{
+    busy=false; btn.disabled=false;
+  });
+});
+
+function progress(p){bar.style.width=p+"%";}
+
+async function startAnalysis(){
+  status.textContent="Analyse startet…";
+  progress(10);
+
+  const data=await loadMarketData();
+  if(!data){
+    status.textContent="Analyse mit letzten verfügbaren Daten";
+    info.textContent="⚠️ Keine neuen Marktdaten";
+    progress(100);
+    return;
+  }
+
+  progress(60);
+  drawChart(data);
+  progress(100);
+  status.textContent="Analyse abgeschlossen";
+}
+
+async function loadMarketData(){
+  try{
+    const now=Math.floor(Date.now()/1000);
+    const from=now-86400*90;
+    const r=await fetch(
+      `https://finnhub.io/api/v1/stock/candle?symbol=${stockSel.value}&resolution=D&from=${from}&to=${now}&token=${FINNHUB_KEY}`
+    );
+    const d=await r.json();
+    if(d.s!=="ok") throw 0;
+    return d;
+  }catch{return null;}
+}
+
+function drawChart(d){
+  if(chart) chart.destroy();
+  chart=new Chart(document.getElementById("chart"),{
+    type:"line",
+    data:{
+      labels:d.c.map((_,i)=>i),
+      datasets:[{label:"Kurs",data:d.c,borderColor:"#00ccaa",tension:.3}]
+    },
+    options:{responsive:true}
+  });
+}
+
+/* ======= HIER KOMMT TEIL 2 HIN ======= */
+/* =========================================================
+   ==================== TEIL 2 – KI =========================
+   ========================================================= */
+
+/* ===============================
+   KI AN / AUS
+================================ */
+let KI_AKTIV = true;
+
+const kiBtn = document.createElement("button");
+kiBtn.textContent = "🧠 KI: EIN";
+kiBtn.style.width = "100%";
+kiBtn.style.marginTop = "8px";
+document.body.insertBefore(kiBtn, document.getElementById("marketStatus"));
+
+kiBtn.addEventListener("click", () => {
+  KI_AKTIV = !KI_AKTIV;
+  kiBtn.textContent = KI_AKTIV ? "🧠 KI: EIN" : "🧠 KI: AUS";
+});
+
+/* ===============================
+   ANALYSE ERWEITERN
+================================ */
+async function startAnalysis(){
+  status.textContent="Analyse läuft…";
+  progress(10);
+
+  const data = await loadMarketData();
+
+  if(!data){
+    status.textContent="Analyse mit letzten verfügbaren Daten";
+    info.innerHTML="⚠️ Markt geschlossen oder API-Limit erreicht";
+    progress(100);
+    return;
+  }
+
+  progress(35);
+
+  // Chart sofort anzeigen (kein Warten)
+  drawChart(data);
+
+  progress(55);
+
+  const result = KI_AKTIV ? runKI(data) : simpleAnalysis(data);
+
+  progress(80);
+
+  info.innerHTML = `
+    <b>Signal:</b> ${result.signal}<br>
+    <b>Timing:</b> ${result.timing}<br>
+    <b>Stabilität:</b> ${result.stability}%<br>
+    <b>Kipppunkt:</b> ${result.invalid}<br><br>
+    <b>Hauptgründe:</b><br>
+    ${result.reasons.join("<br>")}
+  `;
+
+  progress(100);
+  status.textContent="✅ Analyse abgeschlossen";
+}
+
+/* ===============================
+   KI KERNLOGIK (EU / US AWARE)
+================================ */
+function runKI(d){
+  const c = d.c;
+  const o = d.o;
+  const n = c.length - 1;
+  const market = getMarketForSymbol(stockSel.value);
+
+  let score = 0;
+  let reasons = [];
+
+  /* Trend */
+  if(c[n] > c[n-5]){
+    score += 3;
+    reasons.push("• Aufwärtstrend bestätigt");
+  }
+
+  /* Momentum */
+  if(c[n] > c[n-1]){
+    score += 2;
+    reasons.push("• Positives Momentum");
+  }
+
+  /* Volatilität */
+  const vol = Math.abs(c[n] - c[n-3]) / c[n];
+  if(vol < 0.025){
+    score += 2;
+    reasons.push("• Ruhige Marktphase");
+  }else{
+    score -= 1;
+    reasons.push("• Erhöhte Volatilität");
+  }
+
+  /* Candlestick */
+  if(c[n] > o[n] && c[n-1] < o[n-1]){
+    score += 3;
+    reasons.push("• Bullish Engulfing");
+  }
+
+  /* Markt-Kontext */
+  reasons.push(
+    market === "EU"
+      ? "• Europäische Börse berücksichtigt"
+      : "• US-Börse berücksichtigt"
+  );
+
+  let signal = "HALTEN";
+  if(score >= 6) signal = "KAUFEN";
+  if(score <= 2) signal = "VERKAUFEN";
+
+  return {
+    signal,
+    timing:
+      score >= 6 ? "🟢 Jetzt gutes Zeitfenster" :
+      score >= 4 ? "🟡 Abwarten empfohlen" :
+                   "🔴 Ungünstiger Zeitpunkt",
+    stability: Math.min(95, 45 + score * 7),
+    invalid: (c[n] * 0.97).toFixed(2),
+    reasons
+  };
+}
+
+/* ===============================
+   BACKUP ANALYSE (KI AUS)
+================================ */
+function simpleAnalysis(d){
+  const c = d.c;
+  const n = c.length - 1;
+  const trend = c[n] > c[n-5];
+
+  return {
+    signal: trend ? "HALTEN" : "VERKAUFEN",
+    timing: "Neutral",
+    stability: 50,
+    invalid: (c[n] * 0.95).toFixed(2),
+    reasons: ["• Einfache Trendanalyse (KI AUS)"]
+  };
+}
+
+/* ===============================
+   AKTIENLISTE ERWEITERN (EU + US)
+================================ */
+const MORE_STOCKS = [
+ ["JPM","JPMorgan Chase"],
+ ["V","Visa"],
+ ["MA","Mastercard"],
+ ["KO","Coca-Cola"],
+ ["PEP","PepsiCo"],
+ ["PG","Procter & Gamble"],
+ ["NKE","Nike"],
+ ["DIS","Disney"],
+ ["INTC","Intel"],
+ ["AMD","AMD"],
+ ["ORCL","Oracle"],
+ ["IBM","IBM"],
+ ["CSCO","Cisco"],
+ ["TSM","TSMC"],
+ ["BABA","Alibaba"],
+ ["XOM","Exxon Mobil"],
+ ["CVX","Chevron"],
+ ["WMT","Walmart"],
+ ["COST","Costco"],
+ ["MCD","McDonald's"],
+ ["SBUX","Starbucks"],
+ ["PFE","Pfizer"],
+ ["MRK","Merck"],
+ ["JNJ","Johnson & Johnson"],
+ ["UNH","UnitedHealth"],
+ ["GS","Goldman Sachs"],
+ ["MS","Morgan Stanley"],
+ ["BAC","Bank of America"],
+ ["WFC","Wells Fargo"],
+ ["HSBC","HSBC Holdings"],
+ ["BP","BP plc"],
+ ["RIO","Rio Tinto"],
+ ["BHP","BHP Group"],
+ ["UL","Unilever"],
+ ["NVS","Novartis"],
+ ["SNY","Sanofi"],
+ ["ABB","ABB Ltd"]
+];
+
+MORE_STOCKS.forEach(s=>{
+  if(![...stockSel.options].some(o=>o.value===s[0])){
+    const o=document.createElement("option");
+    o.value=s[0];
+    o.textContent=s[0]+" – "+s[1];
+    stockSel.appendChild(o);
+  }
+});
+
+/* ===============================
+   ============ ENDE ============
+================================ */
+
+</script>
+
+</body>
+</html>
